@@ -124,6 +124,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           extra="$(gh api "repos/$GITHUB_REPOSITORY/branches" --paginate --jq '.[].name' | grep -vxE 'main|staging' || true)"
+          # dependabot-exception (2026-10-25): Dependabot security/version branches are the one transient exception;
+          # GitHub deletes them when their PR is merged or closed.
+          extra="$(printf '%s\n' "$extra" | grep -v '^dependabot/' | grep -v '^$' || true)"
           if [ -n "$extra" ]; then
             echo "::error title=branch-policy::Branches other than main/staging exist: $(echo "$extra" | tr '\n' ' ')"
             exit 1
