@@ -24,7 +24,10 @@ def sh(cwd: str, *args: str, check: bool = True, env: dict | None = None, input:
     full_env = dict(os.environ, GIT_AUTHOR_NAME="Owner", GIT_AUTHOR_EMAIL="owner@example.com",
                     GIT_COMMITTER_NAME="Owner", GIT_COMMITTER_EMAIL="owner@example.com",
                     GITHUB_ACTIONS="")
-    full_env.pop("GITHUB_STEP_SUMMARY", None)
+    # Hermetic: drop CI context (GITHUB_REPOSITORY, GITHUB_STEP_SUMMARY, ...) so tests
+    # behave the same locally and inside GitHub Actions.
+    for key in [k for k in full_env if k.startswith(("GITHUB_", "RUNNER_"))]:
+        full_env.pop(key)
     if env:
         full_env.update(env)
     return subprocess.run(list(args), cwd=cwd, capture_output=True, text=True, check=check,
