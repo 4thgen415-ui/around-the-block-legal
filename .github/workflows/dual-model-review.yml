@@ -1,0 +1,71 @@
+# Second-model review of agent changes (scripts/ai/dual_review.py).
+# Needs repository secret GEMINI_API_KEY (free tier) or OPENAI_API_KEY.
+# Without a key the review job is SKIPPED with a notice - never a fake pass.
+name: Dual-model review
+
+on:
+  push:
+    branches: [staging]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dual-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  keys:
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.k.outputs.present }}
+    steps:
+      - id: k
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY$OPENAI_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Dual-model review SKIPPED::No GEMINI_API_KEY or OPENAI_API_KEY secret is set. This is NOT a pass."
+            echo "### Dual-model review: SKIPPED (no API key secret). Not a pass." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  review:
+    needs: keys
+    if: needs.keys.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Review with second model
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DUAL_REVIEW_MODEL: ${{ vars.DUAL_REVIEW_MODEL }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER_EVENT: ${{ github.event.pull_request.number }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          git fetch --no-tags origin main
+          if [ -n "$PR_NUMBER_EVENT" ]; then
+            pr="$PR_NUMBER_EVENT"
+            printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/body.md"
+          else
+            pr="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number // ""')"
+            gh pr list --base main --head staging --state open --json body --jq '.[0].body // ""' > "$RUNNER_TEMP/body.md"
+          fi
+          python3 scripts/ai/dual_review.py --base origin/main --pr-body-file "$RUNNER_TEMP/body.md" --pr-number "$pr"

@@ -1,0 +1,38 @@
+# Socket supply-chain scan. Preferred route: install the free Socket GitHub App
+# (https://github.com/apps/socket-security). This optional CLI job runs only
+# when the SOCKET_CLI_API_TOKEN secret exists; otherwise it says so (not a pass).
+name: Socket
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  socket:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOCKET_CLI_API_TOKEN: ${{ secrets.SOCKET_CLI_API_TOKEN }}
+      SOCKET_CLI_ORG_SLUG: ${{ vars.SOCKET_CLI_ORG_SLUG }}
+    steps:
+      - name: Token present?
+        id: t
+        run: |
+          if [ -n "$SOCKET_CLI_API_TOKEN" ]; then echo "on=true" >> "$GITHUB_OUTPUT"; else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Socket SKIPPED::No SOCKET_CLI_API_TOKEN secret. Install the Socket GitHub App or add the token. Not a pass."
+          fi
+      - uses: actions/checkout@v5
+        if: steps.t.outputs.on == 'true'
+      - uses: actions/setup-node@v5
+        if: steps.t.outputs.on == 'true'
+        with:
+          node-version: "24"
+      - name: socket ci
+        if: steps.t.outputs.on == 'true'
+        run: npx --yes socket@latest ci

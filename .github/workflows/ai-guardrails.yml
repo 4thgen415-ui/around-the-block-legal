@@ -1,0 +1,131 @@
+# AI guardrails - deterministic checks for agent changes (scripts/ai/README.md).
+# Runs on every push to staging/main and on PRs into main. Every job here is a
+# required check: agent-pr-loop.yml only merges staging -> main when ALL check
+# runs on the head commit succeeded. There are no bypass labels.
+name: AI guardrails
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ai-guardrails-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  repo-checks:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [lint, typecheck, test, build]
+    steps:
+      - uses: actions/checkout@v5
+      - name: No toolchain needed (static site)
+        run: echo static
+      - name: Run ${{ matrix.check }} (real repo commands, see AGENTS.md)
+        run: scripts/ai/run-checks.sh "${{ matrix.check }}"
+
+  diff-checks:
+    name: guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Resolve base ref and PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          git fetch --no-tags origin main
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="origin/$PR_BASE"
+            printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          elif [ "$GITHUB_REF_NAME" = "staging" ]; then
+            base="origin/main"
+            gh pr list --base main --head staging --state open --json body --jq '.[0].body // ""' > "$RUNNER_TEMP/pr-body.md" || : > "$RUNNER_TEMP/pr-body.md"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
+            base="$BEFORE"
+            : > "$RUNNER_TEMP/pr-body.md"
+          else
+            base="HEAD~1"
+            : > "$RUNNER_TEMP/pr-body.md"
+          fi
+          echo "BASE_REF=$base" >> "$GITHUB_ENV"
+          echo "Diff base: $base"
+      - name: Guardrail self-test (unit tests + hook sample JSON)
+        run: |
+          python3 -m unittest discover -s scripts/ai/tests -p 'test_*.py' -v
+          scripts/ai/tests/test-pre-edit-guard.sh
+          npx --yes tsx --test scripts/ai/tests/honestEmpty.check.mjs
+      - name: Review rules (added lines only)
+        run: scripts/ai/review-rules.sh --diff "$BASE_REF"
+      - name: Tests untouched (TDD gate, no bypass)
+        run: scripts/ai/check-tests-untouched.sh "$BASE_REF"
+      - name: Editlint (scope, symbols, comments, line endings, budget)
+        run: python3 scripts/ai/editlint.py --base "$BASE_REF" --pr-body-file "$RUNNER_TEMP/pr-body.md"
+      - name: Module lint (new files within budget, no deep imports)
+        run: python3 scripts/ai/module_lint.py --base "$BASE_REF"
+      - name: Backstops (claims without evidence, invented URLs, placeholder IDs)
+        run: |
+          if [ -s "$RUNNER_TEMP/pr-body.md" ]; then
+            python3 scripts/ai/backstops/check_output.py --text-file "$RUNNER_TEMP/pr-body.md" --diff "$BASE_REF"
+          else
+            python3 scripts/ai/backstops/check_output.py --diff "$BASE_REF"
+          fi
+
+  source-is-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PRs into main must come from staging in this repository
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Not a pull request (event: $EVENT_NAME, ref: $GITHUB_REF_NAME) - nothing to check."
+            exit 0
+          fi
+          if [ "$HEAD_REF" != "staging" ] || [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error title=source-is-staging::PRs into main must come from $GITHUB_REPOSITORY:staging (got $HEAD_REPO:$HEAD_REF)."
+            exit 1
+          fi
+          echo "OK: head is staging."
+
+  branch-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exactly two branches (main, staging)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          extra="$(gh api "repos/$GITHUB_REPOSITORY/branches" --paginate --jq '.[].name' | grep -vxE 'main|staging' || true)"
+          if [ -n "$extra" ]; then
+            echo "::error title=branch-policy::Branches other than main/staging exist: $(echo "$extra" | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "OK: only main and staging exist."

@@ -1,0 +1,44 @@
+# AI guardrail settings (owner-only; read by scripts/ai/*). Flat YAML subset.
+test_globs:
+  - "**/*.test.*"
+  - "**/*.spec.*"
+  - "**/__tests__/**"
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - "tests/**"
+  - "test/**"
+  - "e2e/**"
+  - "**/tests/**"
+  - "**/test/**"
+  - "**/e2e/**"
+guardrail_globs:
+  - AGENTS.md
+  - CLAUDE.md
+  - .ai/config.yml
+  - ".claude/**"
+  - ".cursor/rules/**"
+  - ".github/workflows/**"
+  - "scripts/ai/**"
+  - "docs/ai/**"
+ignore_globs:
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.next/**"
+  - "**/*.min.js"
+  - "**/package-lock.json"
+  - "**/pnpm-lock.yaml"
+  - "**/yarn.lock"
+  - "**/uv.lock"
+  - "**/*.lock"
+  - "**/vendor/**"
+# Optional: owner e-mail(s) allowed to make test-only commits (empty = anyone, before implementation only)
+test_authors: []
+# Change budget per staging -> main change (added + removed lines)
+default_max_lines: 200
+max_lines_ceiling: 400
+# Module budget (scripts/ai/module_lint.py): NEW files fail above this, existing files only warn
+module_max_lines: 300
+module_max_symbols: 10
+# Hosts agents may cite in PR text without the URL existing in the repo
+backstop_allow_hosts: []

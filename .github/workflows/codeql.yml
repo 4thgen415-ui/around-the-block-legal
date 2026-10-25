@@ -1,0 +1,43 @@
+# CodeQL code scanning (free for public repos; private personal repos need
+# GitHub Code Security, so the job only runs there when the repository variable
+# CODE_SCANNING_ENABLED is "true").
+# Uses github/codeql-action v4: v3 was requested, but v3 is deprecated in
+# December 2026 (see the guardrail PREVIEW).
+name: CodeQL
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    if: ${{ !github.event.repository.private || vars.CODE_SCANNING_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

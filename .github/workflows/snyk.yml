@@ -1,0 +1,54 @@
+# Snyk Agent Scan (AI agent configs: MCP servers, skills) + Snyk Open Source.
+# Both need the SNYK_TOKEN secret (free Snyk account). Without it the job says
+# SKIPPED (not a pass). Local equivalent: uvx snyk-agent-scan@latest .
+name: Snyk
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  snyk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - name: Token present?
+        id: t
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then echo "on=true" >> "$GITHUB_OUTPUT"; else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Snyk SKIPPED::No SNYK_TOKEN secret (free account at snyk.io). Not a pass."
+          fi
+      - uses: actions/checkout@v5
+        if: steps.t.outputs.on == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.t.outputs.on == 'true'
+      - name: Snyk Agent Scan (repo-local agent configs)
+        if: steps.t.outputs.on == 'true'
+        run: |
+          paths=""
+          for p in .mcp.json .cursor/mcp.json .vscode/mcp.json .claude/skills .agents/skills .cursor/skills; do
+            [ -e "$p" ] && paths="$paths $p"
+          done
+          if [ -z "$paths" ]; then
+            echo "No MCP/skill configs in this repo - nothing for Agent Scan to scan."
+            exit 0
+          fi
+          # shellcheck disable=SC2086
+          uvx snyk-agent-scan@latest --ci $paths
+      - uses: actions/setup-node@v5
+        if: steps.t.outputs.on == 'true'
+        with:
+          node-version: "22"
+      - name: Snyk Open Source (high+ severity)
+        if: steps.t.outputs.on == 'true'
+        run: npx --yes snyk@latest test --all-projects --severity-threshold=high
