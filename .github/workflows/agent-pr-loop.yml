@@ -1,0 +1,140 @@
+# Agent PR loop (zero human-in-the-loop, staging-only topology).
+#  * push to staging          -> make sure ONE staging -> main PR is open
+#  * a check workflow finishes on staging:
+#      failure -> label ai-failing, comment the failing log, count attempts
+#                 (labels ai-attempt-1..3); at 3 -> ai-retry-cap-reached, close
+#                 the PR, keep the work as tag ai-failed/<run-id>, reset staging
+#      success -> merge-when-green: merge ONLY if every check run on the head
+#                 commit succeeded (works on GitHub Free, where required checks
+#                 / auto-merge are unavailable for private repos), then run the
+#                 main checks and reset staging to main
+#  * AI guardrails fails on main after a merge -> scripts/ai/auto_revert.py
+#    reverts the merge THROUGH staging (never touches main directly).
+# Never creates branches. Needs: Settings > Actions > "Allow GitHub Actions to
+# create and approve pull requests".
+name: Agent PR loop
+
+on:
+  push:
+    branches: [staging]
+  workflow_run:
+    workflows: ["AI guardrails", "Dual-model review", "CodeQL"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+  checks: read
+
+concurrency:
+  group: agent-pr-loop
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  MAX_ATTEMPTS: "3"
+
+jobs:
+  ensure-pr:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open the staging -> main PR if none is open
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/compare/main...staging" --jq .ahead_by)" = "0" ]; then
+            echo "staging has no commits ahead of main."; exit 0
+          fi
+          pr="$(gh pr list -R "$GITHUB_REPOSITORY" --base main --head staging --state open --json number --jq '.[0].number // ""')"
+          if [ -z "$pr" ]; then
+            gh pr create -R "$GITHUB_REPOSITORY" --base main --head staging \
+              --title "staging -> main: ${HEAD_MSG%%$'\n'*}" \
+              --body "Automated staging -> main PR. Declare scope in .ai/change-scope.yml or an \`ai-change-scope\` block here."
+          else
+            echo "PR #$pr already open."
+          fi
+
+  staging-result:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find the open staging -> main PR
+        id: pr
+        run: |
+          pr="$(gh pr list -R "$GITHUB_REPOSITORY" --base main --head staging --state open --json number,headRefOid --jq '.[0] | "\(.number) \(.headRefOid)"' || true)"
+          echo "number=${pr%% *}" >> "$GITHUB_OUTPUT"
+          echo "head=${pr##* }" >> "$GITHUB_OUTPUT"
+          echo "PR: ${pr:-none}"
+      - name: Failure -> label, comment, count attempts, cap at 3
+        if: steps.pr.outputs.number != '' && github.event.workflow_run.conclusion == 'failure'
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WF: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          for l in ai-failing ai-retry-cap-reached ai-attempt-1 ai-attempt-2 ai-attempt-3; do
+            gh label create "$l" -R "$GITHUB_REPOSITORY" --color B60205 --force >/dev/null
+          done
+          n="$(gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name | select(startswith("ai-attempt-"))] | length')"
+          n=$((n + 1))
+          log="$(gh run view "$RUN_ID" -R "$GITHUB_REPOSITORY" --log-failed 2>/dev/null | tail -n 80 | cut -c1-300 || echo '(log unavailable)')"
+          gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --add-label ai-failing --add-label "ai-attempt-$(( n > MAX_ATTEMPTS ? MAX_ATTEMPTS : n ))"
+          printf '### %s failed (attempt %s/%s)\nRun: %s\n\n~~~\n%s\n~~~\nFix the cause on staging; do not edit tests or guardrails.\n' \
+            "$WF" "$n" "$MAX_ATTEMPTS" "$RUN_URL" "$log" > "$RUNNER_TEMP/c.md"
+          gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/c.md"
+          if [ "$n" -ge "$MAX_ATTEMPTS" ]; then
+            gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --add-label ai-retry-cap-reached
+            head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/staging" --jq .object.sha)"
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/ai-failed/$RUN_ID" -f "sha=$head" >/dev/null
+            gh pr close "$PR" -R "$GITHUB_REPOSITORY" --comment "Retry cap ($MAX_ATTEMPTS) reached after $WF failed again ($RUN_URL). Work preserved as tag ai-failed/$RUN_ID; staging is being reset to main."
+            echo "::warning title=agent-pr-loop::Retry cap reached; PR #$PR closed; work kept in tag ai-failed/$RUN_ID."
+            gh workflow run reset-staging.yml -R "$GITHUB_REPOSITORY" -f force=true
+          fi
+      - name: Success -> merge when ALL checks on the head commit are green
+        if: steps.pr.outputs.number != '' && github.event.workflow_run.conclusion == 'success'
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          HEAD: ${{ steps.pr.outputs.head }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$HEAD" != "$RUN_SHA" ]; then echo "Run is for $RUN_SHA, PR head is $HEAD - waiting for newer runs."; exit 0; fi
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD/check-runs?per_page=100" --paginate --jq '.check_runs[] | select(.app.slug == "github-actions") | "\(.name)\t\(.status)\t\(.conclusion)"')"
+          echo "$runs"
+          echo "$runs" | grep -q . || { echo "No check runs yet."; exit 0; }
+          if echo "$runs" | awk -F'\t' '$2 != "completed"' | grep -q .; then echo "Checks still running - a later run will merge."; exit 0; fi
+          bad="$(echo "$runs" | awk -F'\t' '$3 != "success" && $3 != "skipped" && $3 != "neutral"')"
+          if [ -n "$bad" ]; then echo "Not merging; failing checks:"; echo "$bad"; exit 0; fi
+          for wf in "AI guardrails" "Dual-model review"; do
+            gh run list -R "$GITHUB_REPOSITORY" --commit "$HEAD" --workflow "$wf" --json conclusion --jq '.[0].conclusion' | grep -qx success \
+              || { echo "Workflow '$wf' has no successful run on $HEAD yet."; exit 0; }
+          done
+          gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --remove-label ai-failing 2>/dev/null || true
+          gh pr merge "$PR" -R "$GITHUB_REPOSITORY" --squash --match-head-commit "$HEAD"
+          gh workflow run ai-guardrails.yml -R "$GITHUB_REPOSITORY" --ref main
+          gh workflow run reset-staging.yml -R "$GITHUB_REPOSITORY"
+
+  main-failed:
+    if: >-
+      github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.name == 'AI guardrails' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Revert the bad commit through staging
+        env:
+          BAD: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 scripts/ai/auto_revert.py --bad-sha "$BAD"
+          # pushes made with GITHUB_TOKEN do not trigger workflows; start the staging checks explicitly
+          gh workflow run ai-guardrails.yml -R "$GITHUB_REPOSITORY" --ref staging
+          gh workflow run dual-model-review.yml -R "$GITHUB_REPOSITORY" --ref staging

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Git pre-commit hook (install: scripts/ai/install-hooks.sh).
+#  * rejects commits that mix test files and non-test files (any branch)
+#  * rejects test-file changes while tests are locked (scripts/ai/lock-tests.sh);
+#    the owner unlocks with scripts/ai/unlock-tests.sh to write failing tests
+#  * rejects commits on branches other than main/staging (repo policy: exactly
+#    two branches; agents work on staging)
+#  * runs scripts/ai/review-rules.sh --staged on the staged files
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+gitdir="$(git rev-parse --absolute-git-dir)"
+
+branch="$(git symbolic-ref --quiet --short HEAD || echo DETACHED)"
+case "$branch" in
+  main|staging|DETACHED) ;;
+  *) echo "pre-commit: branch '$branch' is not allowed. This repo has exactly two branches: main and staging. Agents commit to staging." >&2; exit 1 ;;
+esac
+
+tests=0
+other=0
+while IFS=' ' read -r kind path; do
+  [ -n "$path" ] || continue
+  if [ "$kind" = "test" ]; then tests=$((tests + 1)); else other=$((other + 1)); fi
+done < <(git diff --cached --name-only | python3 scripts/ai/pathrules.py classify)
+
+if [ "$tests" -gt 0 ] && [ "$other" -gt 0 ]; then
+  echo "pre-commit: this commit mixes $tests test file(s) with $other non-test file(s). Commit tests separately (docs/ai/TDD.md)." >&2
+  exit 1
+fi
+if [ "$tests" -gt 0 ] && [ ! -e "$gitdir/ai-tests-unlocked" ]; then
+  echo "pre-commit: test files are locked. Only the owner changes tests (scripts/ai/unlock-tests.sh)." >&2
+  exit 1
+fi
+if [ -x scripts/ai/review-rules.sh ]; then
+  scripts/ai/review-rules.sh --staged
+fi

@@ -1,0 +1,45 @@
+# Reset staging to main after a staging -> main merge (two-branch topology).
+# Safe by default: only resets when staging's tree is identical to main's
+# (i.e. everything on staging was merged). force=true (used by the retry cap,
+# which first preserves the work as an ai-failed/* tag) resets unconditionally.
+name: Reset staging
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Reset even if staging has unmerged changes (work must already be tagged)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: reset-staging
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged && github.event.pull_request.head.ref == 'staging')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Reset staging to main
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          git fetch --no-tags origin main staging
+          if [ "$(git rev-parse origin/main)" = "$(git rev-parse origin/staging)" ]; then echo "staging already equals main."; exit 0; fi
+          if [ "$FORCE" != "true" ] && ! git diff --quiet origin/main origin/staging; then
+            echo "::error title=reset-staging::staging has changes that are not on main; refusing to reset (dispatch with force=true after preserving them)."
+            git diff --stat origin/main origin/staging
+            exit 1
+          fi
+          git push --force origin origin/main:refs/heads/staging
+          echo "staging reset to $(git rev-parse --short origin/main)."

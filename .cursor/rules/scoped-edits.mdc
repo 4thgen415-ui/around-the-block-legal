@@ -1,0 +1,17 @@
+---
+description: Scoped, verifiable edits - change only what the request names, never rewrite or remove existing content
+globs:
+alwaysApply: true
+---
+# Scoped edits (AI guardrails)
+
+- Before editing, declare the scope in `.ai/change-scope.yml` (or an `ai-change-scope` block in the PR body): `request`, `allow` (`path::Symbol`), `allow_files`, `max_lines`. `scripts/ai/editlint.py` fails CI on anything outside it.
+- Change only the functions/symbols the request names. Never rename, reformat, reorder or "clean up" neighbouring code.
+- Never remove or rewrite existing features, text, comments or files unless the request explicitly says so. Keep line endings and the final newline exactly as they are.
+- Write complete code. No `TODO`, `...rest of code`, `// ... existing code`, lorem ipsum, invented IDs or URLs.
+- Tests are read-only (`scripts/ai/pre-edit-guard.sh` blocks them). If a test looks wrong, stop and ask the owner; never weaken it.
+- Guardrail files (AGENTS.md, CLAUDE.md, .ai/, .claude/, .cursor/rules/, .github/workflows/, scripts/ai/, docs/ai/) are owner-only.
+- Work only on the `staging` branch. Never create branches, tags or PRs other than the staging -> main PR the automation opens.
+- Module splits happen ONLY via a declared `refactor-split` scope (`mode: refactor-split`, `split_from`, `split_to`, `split_symbols`) in its own behaviour-preserving commit on staging, and only for a file you are already editing. editlint verifies moved symbols are byte-identical. Never split during unrelated work.
+- New files must stay within the module budget (`.ai/config.yml`: module_max_lines / module_max_symbols) and import other modules only through their `index.ts` / `__init__.py` (`scripts/ai/module_lint.py`).
+- Done means: the repo's real lint/typecheck/test/build commands from AGENTS.md ran and their output is pasted (or the CI run is linked). Never claim "tests pass" without that evidence.
