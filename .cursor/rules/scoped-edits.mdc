@@ -15,3 +15,4 @@ alwaysApply: true
 - Module splits happen ONLY via a declared `refactor-split` scope (`mode: refactor-split`, `split_from`, `split_to`, `split_symbols`) in its own behaviour-preserving commit on staging, and only for a file you are already editing. editlint verifies moved symbols are byte-identical. Never split during unrelated work.
 - New files must stay within the module budget (`.ai/config.yml`: module_max_lines / module_max_symbols) and import other modules only through their `index.ts` / `__init__.py` (`scripts/ai/module_lint.py`).
 - Done means: the repo's real lint/typecheck/test/build commands from AGENTS.md ran and their output is pasted (or the CI run is linked). Never claim "tests pass" without that evidence.
+- Which checks run depends on the work mode: SANDBOX (default) = one quick check under ~1 minute; SHIP (owner says "push this", "ship it" or "deploy") = `scripts/ai/ship.sh`, the full suite and every check. See `.cursor/rules/work-modes.mdc`.

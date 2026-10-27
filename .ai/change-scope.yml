@@ -1,9 +1,8 @@
 # Declared scope of the current change (read by scripts/ai/editlint.py).
 # The agent rewrites this file for every change; see AGENTS.md "Scoped edits".
-request: "Add AI guardrails (AGENTS.md section, hooks, CI checks, docs) - rollout 2026-10-25"
+request: "Owner-requested guardrail update 2026-10-27: AGENTS.md sections 'Work modes: SANDBOX (default) and SHIP' and 'Maximum automation (owner rules)', TDD work-mode note, .cursor/rules/work-modes.mdc, scripts/ai/ship.sh, mode-aware pre-commit (full suite only with AI_MODE=ship). Additions only; no app code."
 mode: normal
-max_lines: 400
+max_lines: 200
 allow:
   - "AGENTS.md::*"
-  - "CLAUDE.md::*"
 allow_files: []

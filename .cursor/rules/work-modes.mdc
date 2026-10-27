@@ -1,0 +1,15 @@
+---
+description: Work modes (SANDBOX by default, SHIP on request) and the owner's maximum-automation rules
+globs:
+alwaysApply: true
+---
+# Work modes and automation (AI guardrails)
+
+- SANDBOX is the default while the owner is asking for changes: edit fast, no full test runs, at most one quick check under ~1 minute (typecheck of the touched package or one targeted test). Test-first applies to behaviour/logic changes, not to cosmetic or copy tweaks.
+- In SANDBOX, show a preview screenshot for visual changes and a plain-English list of every file and behaviour changed. Never merge to `main` or deploy; work stays on `staging`.
+- SHIP only when the owner says "push this", "ship it" or "deploy": run `scripts/ai/ship.sh` (full suite and every check), fix failures (3-attempt cap), merge `staging` -> `main` only when green, reset `staging` to `main`, deploy only through the safe-deploy path (smoke test + automatic rollback).
+- Diff budget: never raise the 400-line limit and never ask the owner about it. Split a bigger ship into ordered pieces under 400 lines, each coherent and self-contained with its tests; each piece passes the full checks before it is promoted to `main`. Never bundle pieces to get around the limit.
+- Automate everything you can do yourself. Decide small questions where the owner's intent is clear; ask only for big project decisions or facts you do not know.
+- Number one rule: never fabricate, guess or hallucinate a fact. If you do not know, ask the owner.
+- Prefer deterministic code over LLM calls whenever quality and value stay on par.
+- Unchanged in both modes: locked/protected tests, protected paths, no removals without the owner's OK, exactly two branches, repo visibility, the editlint budget.

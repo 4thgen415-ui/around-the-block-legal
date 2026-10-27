@@ -6,6 +6,7 @@ request. Owner-only: agents are blocked from editing anything here.
 | File | What it does | Runs in |
 |---|---|---|
 | `run-checks.sh` | The repo's real lint / typecheck / test / build commands (`NOT CONFIGURED` when the repo has none) | CI `repo-checks`, locally |
+| `ship.sh` | SHIP gate (AGENTS.md "Work modes"): full suite + every guardrail check with `AI_MODE=ship`; `--suite` = full suite only. SANDBOX (default) never runs it | owner says "ship it"; pre-commit when `AI_MODE=ship` |
 | `pre-edit-guard.sh` / `pre_edit_guard.py` | Claude Code PreToolUse hook: blocks edits to tests, guardrail files, paths outside the repo, and added placeholders (exit 2) | `.claude/settings.json` |
 | `backstops/check_output.py` | Claims without evidence, invented URLs/citations, placeholder IDs | Claude Stop + PostToolUse hooks, CI |
 | `review-rules.sh` | Review feedback as grep rules on added lines (secrets, console.log, focused tests, ...) | CI, pre-commit |

@@ -3,6 +3,81 @@
 
 Rules for any AI coding agent (Claude Code, Cursor, Codex, Devin, ...) working in **around-the-block-legal**. Everything here is enforced by hooks and CI; see `scripts/ai/README.md`.
 
+## Work modes: SANDBOX (default) and SHIP
+
+Tiny edits (moving a box 2 mm, a copy tweak) must take seconds, not the 10-20
+minutes a full test run costs. Pick the mode from the owner's words:
+
+**SANDBOX** (default, whenever the owner is asking for changes)
+- Make the edit fast. No full test runs. Test-first is required for behaviour
+  or logic changes only, not for cosmetic or copy tweaks (`docs/ai/TDD.md`).
+- At most one quick check that takes under ~1 minute, such as a typecheck of
+  the touched package or one targeted test. Hooks and pre-commit run only fast
+  checks in this mode.
+- Every reply shows a screenshot of the preview for visual changes, plus a
+  plain-English list of every file and every behaviour changed, so the owner
+  can spot hallucinations.
+- Never merge to `main` and never deploy. Work stays on `staging`.
+
+**SHIP** (only when the owner explicitly says "push this", "ship it" or "deploy")
+1. Run `scripts/ai/ship.sh` (sets `AI_MODE=ship`): the full test suite and
+   every check in Verification. Behaviour changes get the full
+   red-green-refactor cycle.
+   Definition of done and Verification describe SHIP: a SANDBOX edit is a
+   preview, never "done"; it becomes done only after this full run,
+   protected tests included.
+2. Fix failures with the check-fix loop; after 3 failed attempts stop and
+   report the output.
+3. Diff budget: the 400-line limit per push (`max_lines_ceiling: 400` in
+   `.ai/config.yml`) is deliberately small so each piece gets checked. Never
+   raise it and never ask the owner about it. When a ship is bigger than 400
+   lines, automatically split it into ordered pieces under 400 lines (each a
+   coherent, self-contained change with its tests), run the full checks on each
+   piece, and promote each to `main` only after it passes. If a piece fails,
+   stop, fix it with the check-fix loop, and continue; never bundle pieces to
+   get around the limit.
+4. Merge `staging` -> `main` only when `scripts/ai/ship.sh` and CI are green,
+   then reset `staging` to `main`.
+5. Deploy only through the app's safe-deploy path (smoke test + automatic
+   rollback). Never deploy by hand.
+
+Unchanged in both modes: locked and protected tests are never edited or
+weakened; no feature, button, screen or text is removed without the owner's OK;
+repo visibility never changes (private repos stay private); modules; exactly
+two branches; the editlint diff budget. The pre-edit guard (locked tests,
+protected paths) is always on, and CI on PRs into `main` stays the full gate.
+
+## Maximum automation (owner rules)
+
+> "wherever I don't have to be involved, you shouldn't involve me stop and ask
+> yourself. Is this something I can do and if the answer is yes, then you don't
+> bother me. You do bother me if you don't know the answer to a question you
+> never make up something or hallucinate or fabricate. That is the number one
+> rule that is total blasphemy. If you don't know the answer, you come to me….
+> Big decisions that need to be made on the projects you come to me, but if
+> they're small and your context engine can sense what I want then just do it
+> yourself."
+>
+> "if it's at all possible, you always want to do deterministic code over LLM
+> call cause the LLM call is what cost money so if it could be done without that
+> that's preferred without sacrificing anything this has to do something it has
+> to be on par. It has to provide value"
+>
+> (owner, 2026-10-26)
+
+1. Automate everything you can do yourself. Before asking the owner anything,
+   ask "Can I do this myself?" If yes, do it and do not ask.
+2. Small decisions where the owner's intent is clear from context: decide,
+   proceed, and mention the choice in your summary.
+3. Ask the owner only for big project decisions or for facts you do not know.
+4. Number one rule: never fabricate, guess or hallucinate a fact (names,
+   numbers, prices, URLs, IDs, API behaviour, results). If you do not know,
+   say so and ask.
+5. Prefer deterministic code over LLM calls (LLM calls cost money) whenever
+   quality and value stay on par; use an LLM only where code would be worse.
+6. Every safety rule in this file still holds. Automation never bypasses tests,
+   guards, budgets or the SANDBOX/SHIP rules.
+
 ## Commands
 Stack: Static site (legal pages); no package.json.
 
